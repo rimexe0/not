@@ -21,3 +21,5 @@ tauri-plugin-global-shortcut = "2"
 rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 uuid = { version = "1", features = ["v4"] }
 
+[patch.crates-io]
+global-hotkey = { path = "vendor/global-hotkey" }

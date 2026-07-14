@@ -419,8 +419,21 @@ impl Database {
             .unwrap_or_else(|| "CommandOrControl+Shift+Space".to_string()))
     }
 
-    pub fn set_shortcut(&self, value: &str) -> Result<(), String> {
-        self.set_in("settings", "shortcut", value)
+    pub fn shortcut_label(&self) -> Result<Option<String>, String> {
+        self.setting_from("settings", "shortcut_label")
+    }
+
+    pub fn set_shortcut(&mut self, value: &str, label: &str) -> Result<(), String> {
+        let transaction = self.connection.transaction().map_err(error)?;
+        for (key, setting) in [("shortcut", value), ("shortcut_label", label)] {
+            transaction
+                .execute(
+                    "INSERT INTO settings(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    params![key, setting],
+                )
+                .map_err(error)?;
+        }
+        transaction.commit().map_err(error)
     }
 
     pub fn launch_at_login(&self) -> Result<bool, String> {
@@ -778,6 +791,14 @@ mod tests {
             .unwrap();
         let saved = db.window_state().unwrap().unwrap();
         assert_eq!(saved.display_identifier.as_deref(), Some("Display A"));
+    }
+
+    #[test]
+    fn shortcut_accelerator_and_display_label_are_persisted_together() {
+        let mut db = database();
+        db.set_shortcut("Command+Backquote", "⌘§").unwrap();
+        assert_eq!(db.shortcut().unwrap(), "Command+Backquote");
+        assert_eq!(db.shortcut_label().unwrap().as_deref(), Some("⌘§"));
     }
 
     #[test]

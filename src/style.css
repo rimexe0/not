@@ -63,6 +63,8 @@ button { color: inherit; }
   width: 100%; border: 1px solid var(--border); border-radius: 7px; outline: none;
   background: var(--background); color: var(--text); padding: 8px 9px; margin-bottom: 10px;
 }
+.shortcut-recorder { cursor: default; text-align: center; }
+.setting-error { min-height: 1em; color: var(--danger); }
 .page-list, .trash-list { display: grid; gap: 5px; }
 .page-item { display: block; width: 100%; text-align: left; padding: 9px !important; }
 .page-item small { display: block; margin-top: 5px; color: var(--muted); }

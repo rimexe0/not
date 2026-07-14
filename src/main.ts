@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SwipeTracker } from "./lib/swipe";
+import { formatShortcut, recordShortcut } from "./lib/shortcut";
 import type {
   DeleteResult,
   DeletedPage,
@@ -53,6 +54,7 @@ const swipe = new SwipeTracker();
 
 let note: Note;
 let shortcut = "CommandOrControl+Shift+Space";
+let shortcutDisplay = formatShortcut(shortcut);
 let launchAtLogin = true;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let saveQueue: Promise<boolean> = Promise.resolve(true);
@@ -463,7 +465,7 @@ async function renderSettings(): Promise<void> {
     invoke<DeletedPage[]>("list_deleted"),
   ]);
   content.innerHTML = `
-    <label class="setting">Global shortcut<input class="setting-input" data-setting="shortcut" value="${escapeAttribute(shortcut)}"></label>
+    <label class="setting">Global shortcut<input class="setting-input shortcut-recorder" data-setting="shortcut" value="${escapeAttribute(shortcutDisplay)}" readonly><small>Click, then press a key combination.</small><small class="setting-error"></small></label>
     <label class="setting-row setting"><span>Launch at login</span><input type="checkbox" data-setting="autostart" ${launchAtLogin ? "checked" : ""}></label>
     <div class="setting"><button class="panel-action" type="button" data-setting="export">Export Markdown</button><small class="export-result"></small></div>
     <div class="setting"><strong>Warm summon handler</strong><div class="metrics">${metrics.count} samples\np50 ${metrics.p50Micros} µs\np95 ${metrics.p95Micros} µs\np99 ${metrics.p99Micros} µs</div></div>
@@ -472,9 +474,56 @@ async function renderSettings(): Promise<void> {
   `;
 
   const shortcutInput = content.querySelector<HTMLInputElement>("[data-setting=shortcut]");
-  shortcutInput?.addEventListener("change", async () => {
-    shortcut = await invoke<string>("set_shortcut", { shortcut: shortcutInput.value });
-    shortcutInput.value = shortcut;
+  const shortcutError = content.querySelector<HTMLElement>(".setting-error");
+  let recordingShortcut = false;
+  let savingShortcut = false;
+  shortcutInput?.addEventListener("focus", () => {
+    recordingShortcut = true;
+    void invoke("set_shortcut_recording", { recording: true });
+    shortcutInput.value = "Press shortcut…";
+    if (shortcutError) shortcutError.textContent = "";
+  });
+  shortcutInput?.addEventListener("blur", () => {
+    void invoke("set_shortcut_recording", { recording: false });
+    if (!recordingShortcut) return;
+    recordingShortcut = false;
+    shortcutInput.value = shortcutDisplay;
+  });
+  shortcutInput?.addEventListener("keydown", async (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (savingShortcut) return;
+    if (event.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+      recordingShortcut = false;
+      shortcutInput.value = shortcutDisplay;
+      shortcutInput.blur();
+      return;
+    }
+
+    const recorded = recordShortcut(event);
+    if (!recorded) {
+      shortcutInput.value = event.metaKey || event.ctrlKey || event.altKey || event.shiftKey
+        ? "Press another key…"
+        : "Include a modifier…";
+      return;
+    }
+
+    shortcutInput.value = recorded.display;
+    savingShortcut = true;
+    try {
+      shortcut = await invoke<string>("set_shortcut", {
+        shortcut: recorded.accelerator,
+        label: recorded.display,
+      });
+      shortcutDisplay = recorded.display;
+      recordingShortcut = false;
+      shortcutInput.blur();
+    } catch (error) {
+      shortcutInput.value = "Try another shortcut…";
+      if (shortcutError) shortcutError.textContent = String(error);
+    } finally {
+      savingShortcut = false;
+    }
   });
   content.querySelector<HTMLInputElement>("[data-setting=autostart]")?.addEventListener("change", async (event) => {
     const target = event.currentTarget as HTMLInputElement;
@@ -621,6 +670,7 @@ void listen("request-quit", () => void quitSafely());
 async function start(): Promise<void> {
   const initial = await invoke<InitialState>("load_initial_state");
   shortcut = initial.shortcut;
+  shortcutDisplay = initial.shortcutLabel ?? formatShortcut(shortcut);
   launchAtLogin = initial.launchAtLogin;
   displayNote(initial.note);
   await invoke("mark_ready");

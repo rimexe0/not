@@ -15,6 +15,7 @@ export interface Note {
 export interface InitialState {
   note: Note;
   shortcut: string;
+  shortcutLabel: string | null;
   launchAtLogin: boolean;
 }
 

@@ -31,6 +31,7 @@ struct RuntimeState {
     first_input_count: AtomicU64,
     exit_backup_completed: AtomicBool,
     draft: Mutex<Option<NoteInput>>,
+    shortcut_recording: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -56,6 +57,7 @@ enum PanelSide {
 struct InitialState {
     note: Note,
     shortcut: String,
+    shortcut_label: Option<String>,
     launch_at_login: bool,
 }
 
@@ -100,6 +102,7 @@ impl RuntimeState {
             first_input_count: AtomicU64::new(0),
             exit_backup_completed: AtomicBool::new(false),
             draft: Mutex::new(None),
+            shortcut_recording: AtomicBool::new(false),
         }
     }
 
@@ -163,14 +166,20 @@ async fn load_initial_state(
     app: AppHandle,
     state: State<'_, RuntimeState>,
 ) -> Result<InitialState, String> {
-    let (note, shortcut, launch_at_login) = database_task(&state, |db| {
-        Ok((db.initial_note()?, db.shortcut()?, db.launch_at_login()?))
+    let (note, shortcut, shortcut_label, launch_at_login) = database_task(&state, |db| {
+        Ok((
+            db.initial_note()?,
+            db.shortcut()?,
+            db.shortcut_label()?,
+            db.launch_at_login()?,
+        ))
     })
     .await?;
     let actual_autostart = app.autolaunch().is_enabled().unwrap_or(false);
     Ok(InitialState {
         note,
         shortcut,
+        shortcut_label,
         launch_at_login: launch_at_login && actual_autostart,
     })
 }
@@ -178,6 +187,11 @@ async fn load_initial_state(
 #[tauri::command]
 fn mark_ready(state: State<'_, RuntimeState>) {
     state.ready.store(true, Ordering::Release);
+}
+
+#[tauri::command]
+fn set_shortcut_recording(recording: bool, state: State<'_, RuntimeState>) {
+    state.shortcut_recording.store(recording, Ordering::Release);
 }
 
 #[tauri::command]
@@ -265,6 +279,7 @@ async fn list_deleted(state: State<'_, RuntimeState>) -> Result<Vec<DeletedPage>
 #[tauri::command]
 async fn set_shortcut(
     shortcut: String,
+    label: String,
     app: AppHandle,
     state: State<'_, RuntimeState>,
 ) -> Result<String, String> {
@@ -281,7 +296,11 @@ async fn set_shortcut(
         return Err(error.to_string());
     }
     let saved = candidate.clone();
-    database_task(&state, move |db| db.set_shortcut(&saved)).await?;
+    if let Err(error) = database_task(&state, move |db| db.set_shortcut(&saved, &label)).await {
+        let _ = app.global_shortcut().unregister(candidate.as_str());
+        let _ = app.global_shortcut().register(previous.as_str());
+        return Err(error);
+    }
     Ok(candidate)
 }
 
@@ -614,6 +633,9 @@ pub fn run() {
                     if !state.ready.load(Ordering::Acquire) {
                         return;
                     }
+                    if state.shortcut_recording.load(Ordering::Acquire) {
+                        return;
+                    }
                     let Some(window) = app.get_webview_window("main") else {
                         return;
                     };
@@ -633,6 +655,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_initial_state,
             mark_ready,
+            set_shortcut_recording,
             save_note,
             update_draft,
             update_draft_view,
