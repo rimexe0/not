@@ -1,0 +1,86 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  --background: #1d1d1f;
+  --surface: #29292c;
+  --text: #f2f2f4;
+  --muted: #a6a6ac;
+  --border: rgba(255, 255, 255, 0.13);
+  --danger: #ff8178;
+  --panel-width: 300px;
+  --toolbar-height: 34px;
+  --window-radius: 14px;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+html, body { background: transparent; }
+body { color: var(--text); }
+button, input, textarea { font: inherit; }
+button { color: inherit; }
+
+.layout { position: relative; display: flex; width: 100%; height: 100%; overflow: hidden; border-radius: var(--window-radius); background: var(--background); }
+.layout.panel-left { flex-direction: row-reverse; }
+.editor-shell { position: relative; flex: 1 1 auto; min-width: 280px; height: 100%; background: var(--background); overflow: hidden; }
+.editor {
+  position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; border: 0; outline: 0; resize: none;
+  padding: 30px 28px 28px; background: transparent; color: var(--text);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 15px; line-height: 1.55; caret-color: currentColor;
+}
+.page-preview {
+  position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; margin: 0;
+  padding: 30px 28px 28px; overflow: hidden; pointer-events: none;
+  background: var(--background); color: var(--text); white-space: pre-wrap; overflow-wrap: break-word;
+  font: 15px/1.55 ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+.top-trigger { position: absolute; z-index: 4; inset: 0 0 auto; height: 7px; }
+.toolbar {
+  position: absolute; z-index: 3; inset: 0 0 auto; height: var(--toolbar-height);
+  display: flex; align-items: center; justify-content: flex-end; gap: 4px; padding: 4px 7px;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  opacity: 0; pointer-events: none;
+}
+.toolbar.visible { opacity: 1; pointer-events: auto; }
+.toolbar-drag { flex: 1; height: 100%; cursor: grab; }
+.toolbar button, .panel button {
+  border: 1px solid transparent; border-radius: 6px; background: transparent; padding: 4px 8px; cursor: default;
+}
+.toolbar button:hover, .panel button:hover { background: var(--border); }
+.toolbar .danger:hover { color: var(--danger); }
+
+.panel {
+  flex: 0 0 var(--panel-width); width: var(--panel-width); height: 100%;
+  background: var(--surface); padding: 14px; overflow: auto;
+}
+.panel-right { border-left: 1px solid var(--border); }
+.panel-left { border-right: 1px solid var(--border); }
+.panel-overlay { position: absolute; z-index: 6; inset: 0 0 0 auto; box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18); }
+.panel-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.panel h2 { font-size: 14px; margin: 0; }
+.panel-close { font-size: 18px; line-height: 1; }
+.search, .setting-input {
+  width: 100%; border: 1px solid var(--border); border-radius: 7px; outline: none;
+  background: var(--background); color: var(--text); padding: 8px 9px; margin-bottom: 10px;
+}
+.page-list, .trash-list { display: grid; gap: 5px; }
+.page-item { display: block; width: 100%; text-align: left; padding: 9px !important; }
+.page-item small { display: block; margin-top: 5px; color: var(--muted); }
+.page-snippet { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+mark { background: #e7c95b; color: #211d0f; border-radius: 2px; }
+.empty { color: var(--muted); font-size: 13px; padding: 18px 4px; }
+.setting { display: grid; gap: 6px; margin: 14px 0; font-size: 13px; }
+.setting-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.metrics { color: var(--muted); font: 11px/1.5 ui-monospace, monospace; }
+.panel-action { border-color: var(--border) !important; }
+
+.indicator, .toast {
+  position: absolute; z-index: 5; left: 50%; transform: translateX(-50%);
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+  opacity: 0; pointer-events: none;
+}
+.indicator { bottom: 12px; padding: 4px 8px; color: var(--muted); font-size: 11px; }
+.indicator.visible { opacity: 1; }
+.toast { bottom: 14px; display: flex; align-items: center; gap: 10px; padding: 7px 9px; font-size: 12px; }
+.toast.visible { opacity: 1; pointer-events: auto; }
+.toast button { border: 0; background: transparent; color: inherit; padding: 0; }
