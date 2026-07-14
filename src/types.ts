@@ -65,4 +65,9 @@ export interface SummonMetrics {
   p50Micros: number;
   p95Micros: number;
   p99Micros: number;
+  visibleCount: number;
+  visibleP50Micros: number;
+  visibleP95Micros: number;
+  visibleP99Micros: number;
+  firstInputCount: number;
 }

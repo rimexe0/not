@@ -33,6 +33,7 @@ app.innerHTML = `
       <pre class="page-preview" aria-hidden="true" hidden></pre>
       <div class="indicator" aria-live="polite"></div>
       <div class="toast" aria-live="polite"><span>Page deleted</span><button type="button" data-action="undo">Undo</button></div>
+      <div class="save-error" role="alert"><span>Couldn’t save this page.</span><button type="button" data-action="retry-save">Retry</button></div>
     </section>
   </div>
 `;
@@ -46,6 +47,7 @@ const topTrigger = required<HTMLElement>(".top-trigger");
 const toolbarDrag = required<HTMLElement>(".toolbar-drag");
 const indicator = required<HTMLElement>(".indicator");
 const toast = required<HTMLElement>(".toast");
+const saveError = required<HTMLElement>(".save-error");
 const currentWindow = getCurrentWindow();
 const swipe = new SwipeTracker();
 
@@ -53,7 +55,7 @@ let note: Note;
 let shortcut = "CommandOrControl+Shift+Space";
 let launchAtLogin = true;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
-let saveQueue: Promise<void> = Promise.resolve();
+let saveQueue: Promise<boolean> = Promise.resolve(true);
 let indicatorTimer: ReturnType<typeof setTimeout> | undefined;
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 let panelMode: "pages" | "settings" | null = null;
@@ -64,6 +66,8 @@ let neighborPages: Neighbors | undefined;
 let neighborRequestId = 0;
 let swipeDirection: -1 | 0 | 1 = 0;
 let swipeSettleTimer: ReturnType<typeof setTimeout> | undefined;
+let activeSummonSequence = 0;
+let quitRetryPending = false;
 
 function required<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -84,39 +88,74 @@ function noteInput(): NoteInput {
   };
 }
 
+function mirrorDraft(): void {
+  void invoke("update_draft", { input: noteInput() });
+}
+
+function mirrorDraftView(): void {
+  void invoke("update_draft_view", {
+    noteId: note.id,
+    cursorStart: editor.selectionStart,
+    cursorEnd: editor.selectionEnd,
+    scrollTop: editor.scrollTop,
+  });
+}
+
 function scheduleSave(): void {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => void flushSave(), 250);
 }
 
-function flushSave(): Promise<void> {
+function flushSave(): Promise<boolean> {
   clearTimeout(saveTimer);
   saveTimer = undefined;
   const input = noteInput();
-  saveQueue = saveQueue.catch(() => undefined).then(async () => {
-    const result = await invoke<SaveResult>("save_note", { input });
-    if (note.id === input.id) {
-      const becamePersisted = !note.persisted && result.persisted;
-      const changedEmptyState = note.body.trim() === "" !== (input.body.trim() === "");
-      note.persisted = result.persisted;
-      note.updatedAt = result.updatedAt;
-      note.body = editor.value;
-      note.cursorStart = editor.selectionStart;
-      note.cursorEnd = editor.selectionEnd;
-      note.scrollTop = editor.scrollTop;
-      if (becamePersisted || changedEmptyState) scheduleNeighborPreload();
+  saveQueue = saveQueue.then(async () => {
+    try {
+      const result = await invoke<SaveResult>("save_note", { input });
+      saveError.classList.remove("visible");
+      if (note.id === input.id) {
+        const becamePersisted = !note.persisted && result.persisted;
+        const changedEmptyState = note.body.trim() === "" !== (input.body.trim() === "");
+        note.persisted = result.persisted;
+        note.updatedAt = result.updatedAt;
+        note.body = editor.value;
+        note.cursorStart = editor.selectionStart;
+        note.cursorEnd = editor.selectionEnd;
+        note.scrollTop = editor.scrollTop;
+        if (becamePersisted || changedEmptyState) scheduleNeighborPreload();
+      }
+      return true;
+    } catch {
+      showStorageError("Couldn’t save this page.");
+      return false;
     }
-  });
+  }, () => false);
   return saveQueue;
+}
+
+function showStorageError(message: string): void {
+  const label = saveError.querySelector("span");
+  if (label) label.textContent = message;
+  saveError.classList.add("visible");
+}
+
+async function retryStorageOperation(): Promise<void> {
+  if (quitRetryPending) {
+    await quitSafely();
+  } else {
+    await flushSave();
+  }
 }
 
 function displayNote(next: Note): void {
   note = next;
   editor.value = next.body;
+  editor.setSelectionRange(next.cursorStart, next.cursorEnd);
+  editor.scrollTop = next.scrollTop;
+  mirrorDraft();
   requestAnimationFrame(() => {
     editor.focus({ preventScroll: true });
-    editor.setSelectionRange(next.cursorStart, next.cursorEnd);
-    editor.scrollTop = next.scrollTop;
   });
   showIndicator();
   scheduleNeighborPreload();
@@ -151,8 +190,10 @@ async function navigate(direction: -1 | 1): Promise<void> {
       await nextFrame();
     }
     const target = direction === 1 ? neighborPages?.newer : neighborPages?.older;
-    const navigation = flushSave()
-      .then(() => invoke<Note>("navigate", { noteId: note.id, direction }));
+    const navigation = flushSave().then((saved) => {
+      if (!saved) throw new Error("save failed");
+      return invoke<Note>("navigate", { noteId: note.id, direction });
+    });
 
     if (target) {
       pagePreview.textContent = target.body;
@@ -167,6 +208,9 @@ async function navigate(direction: -1 | 1): Promise<void> {
     }
     pagePreview.textContent = next.body;
     await completeSwipe(Promise.resolve(next), direction);
+  } catch {
+    cleanupSwipe();
+    editor.focus({ preventScroll: true });
   } finally {
     busy = false;
   }
@@ -290,7 +334,7 @@ async function deleteCurrent(): Promise<void> {
   if (busy) return;
   busy = true;
   try {
-    await flushSave();
+    if (!await flushSave()) return;
     const result = await invoke<DeleteResult>("delete_note", { noteId: note.id });
     deletedId = result.deletedId;
     displayNote(result.note);
@@ -316,7 +360,7 @@ async function undoDelete(): Promise<void> {
 async function openPanel(mode: "pages" | "settings"): Promise<void> {
   if (panelMode === mode) return;
   if (panelMode) await closePanel();
-  await flushSave();
+  if (!await flushSave()) return;
   const geometry = await invoke<PanelResult>("set_panel", { open: true });
   panelMode = mode;
   layout.classList.toggle("panel-left", geometry.side === "left");
@@ -372,7 +416,7 @@ async function renderPages(query: string): Promise<void> {
       date.textContent = new Date(page.createdAt).toLocaleString();
       button.append(snippet, date);
       button.addEventListener("click", async () => {
-        await flushSave();
+        if (!await flushSave()) return;
         const selected = await invoke<Note>("select_note", { noteId: page.id });
         await closePanel();
         displayNote(selected);
@@ -423,6 +467,7 @@ async function renderSettings(): Promise<void> {
     <label class="setting-row setting"><span>Launch at login</span><input type="checkbox" data-setting="autostart" ${launchAtLogin ? "checked" : ""}></label>
     <div class="setting"><button class="panel-action" type="button" data-setting="export">Export Markdown</button><small class="export-result"></small></div>
     <div class="setting"><strong>Warm summon handler</strong><div class="metrics">${metrics.count} samples\np50 ${metrics.p50Micros} µs\np95 ${metrics.p95Micros} µs\np99 ${metrics.p99Micros} µs</div></div>
+    <div class="setting"><strong>Summon to webview frame</strong><div class="metrics">${metrics.visibleCount} samples\np50 ${formatMillis(metrics.visibleP50Micros)} ms\np95 ${formatMillis(metrics.visibleP95Micros)} ms\np99 ${formatMillis(metrics.visibleP99Micros)} ms\nfirst inputs captured ${metrics.firstInputCount}</div></div>
     <div class="setting"><strong>Trash · 7 days</strong><div class="trash-list"></div></div>
   `;
 
@@ -463,15 +508,34 @@ function escapeAttribute(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;");
 }
 
+function formatMillis(micros: number): string {
+  return (micros / 1000).toFixed(2);
+}
+
 async function hideWindow(): Promise<void> {
-  await flushSave();
+  if (!await flushSave()) return;
   if (panelMode) await closePanel();
   await invoke("hide_window");
 }
 
-editor.addEventListener("input", scheduleSave);
-editor.addEventListener("select", scheduleSave);
-editor.addEventListener("scroll", scheduleSave, { passive: true });
+editor.addEventListener("input", () => {
+  mirrorDraft();
+  scheduleSave();
+});
+editor.addEventListener("select", () => {
+  mirrorDraftView();
+  scheduleSave();
+});
+editor.addEventListener("scroll", () => {
+  mirrorDraftView();
+  scheduleSave();
+}, { passive: true });
+editor.addEventListener("beforeinput", () => {
+  if (activeSummonSequence === 0) return;
+  const sequence = activeSummonSequence;
+  activeSummonSequence = 0;
+  void invoke("record_first_input", { sequence });
+});
 editor.addEventListener("wheel", (event) => {
   if (panelMode) return;
   const horizontal = Math.abs(event.deltaX) > Math.abs(event.deltaY) * 1.2;
@@ -501,6 +565,7 @@ layout.addEventListener("click", (event) => {
   if (action === "settings") void openPanel("settings");
   if (action === "delete") void deleteCurrent();
   if (action === "undo") void undoDelete();
+  if (action === "retry-save") void retryStorageOperation();
 });
 
 window.addEventListener("keydown", (event) => {
@@ -537,10 +602,21 @@ const persistGeometry = (): void => {
 void currentWindow.onMoved(persistGeometry);
 void currentWindow.onResized(persistGeometry);
 void listen("shortcut-hide", () => void hideWindow());
-void listen("request-quit", async () => {
-  await flushSave();
-  await invoke("quit_app");
+void listen<number>("shortcut-show", ({ payload: sequence }) => {
+  activeSummonSequence = sequence;
+  requestAnimationFrame(() => void invoke("record_visible_frame", { sequence }));
 });
+async function quitSafely(): Promise<void> {
+  if (!await flushSave()) return;
+  try {
+    await invoke("quit_app");
+  } catch {
+    quitRetryPending = true;
+    showStorageError("Couldn’t create a safety backup before quitting.");
+  }
+}
+
+void listen("request-quit", () => void quitSafely());
 
 async function start(): Promise<void> {
   const initial = await invoke<InitialState>("load_initial_state");

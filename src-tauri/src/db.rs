@@ -76,6 +76,7 @@ pub struct SavedWindowState {
     pub width: u32,
     pub height: u32,
     pub scale_factor: f64,
+    pub display_identifier: Option<String>,
 }
 
 pub struct Database {
@@ -118,7 +119,8 @@ impl Database {
                    y INTEGER NOT NULL,
                    width INTEGER NOT NULL,
                    height INTEGER NOT NULL,
-                   scale_factor REAL NOT NULL
+                   scale_factor REAL NOT NULL,
+                   display_identifier TEXT
                  );
                  CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(note_id UNINDEXED, body);
                  CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes WHEN new.deleted_at IS NULL BEGIN
@@ -134,6 +136,22 @@ impl Database {
                  END;",
             )
             .map_err(error)?;
+
+        let has_display_identifier: bool = connection
+            .query_row(
+                "SELECT count(*) > 0 FROM pragma_table_info('window_state') WHERE name='display_identifier'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(error)?;
+        if !has_display_identifier {
+            connection
+                .execute(
+                    "ALTER TABLE window_state ADD COLUMN display_identifier TEXT",
+                    [],
+                )
+                .map_err(error)?;
+        }
 
         let db = Self {
             connection,
@@ -360,7 +378,7 @@ impl Database {
         } else {
             let fts_query = fts_query(query);
             let mut statement = self.connection
-                .prepare("SELECT n.id, substr(replace(n.body, char(10), ' '), 1, 240), n.created_at, n.position FROM notes_fts JOIN notes n ON n.id=notes_fts.note_id WHERE notes_fts MATCH ?1 AND n.deleted_at IS NULL ORDER BY n.created_at DESC, n.position DESC")
+                .prepare("SELECT n.id, replace(snippet(notes_fts, 1, '', '', ' … ', 32), char(10), ' '), n.created_at, n.position FROM notes_fts JOIN notes n ON n.id=notes_fts.note_id WHERE notes_fts MATCH ?1 AND n.deleted_at IS NULL ORDER BY n.created_at DESC, n.position DESC")
                 .map_err(error)?;
             let rows = statement
                 .query_map([fts_query], page_summary)
@@ -373,6 +391,7 @@ impl Database {
     }
 
     pub fn list_deleted(&self) -> Result<Vec<DeletedPage>, String> {
+        self.purge_deleted()?;
         let mut statement = self.connection
             .prepare("SELECT id, substr(replace(body, char(10), ' '), 1, 240), created_at, position, deleted_at FROM notes WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC")
             .map_err(error)?;
@@ -419,7 +438,7 @@ impl Database {
     pub fn window_state(&self) -> Result<Option<SavedWindowState>, String> {
         self.connection
             .query_row(
-                "SELECT x, y, width, height, scale_factor FROM window_state WHERE id=1",
+                "SELECT x, y, width, height, scale_factor, display_identifier FROM window_state WHERE id=1",
                 [],
                 |row| {
                     Ok(SavedWindowState {
@@ -428,6 +447,7 @@ impl Database {
                         width: row.get(2)?,
                         height: row.get(3)?,
                         scale_factor: row.get(4)?,
+                        display_identifier: row.get(5)?,
                     })
                 },
             )
@@ -442,20 +462,22 @@ impl Database {
         width: u32,
         height: u32,
         scale: f64,
+        display_identifier: Option<String>,
     ) -> Result<(), String> {
         self.connection.execute(
-            "INSERT INTO window_state(id, x, y, width, height, scale_factor) VALUES(1, ?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(id) DO UPDATE SET x=excluded.x, y=excluded.y, width=excluded.width, height=excluded.height, scale_factor=excluded.scale_factor",
-            params![x, y, width, height, scale],
+            "INSERT INTO window_state(id, x, y, width, height, scale_factor, display_identifier) VALUES(1, ?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET x=excluded.x, y=excluded.y, width=excluded.width, height=excluded.height, scale_factor=excluded.scale_factor, display_identifier=excluded.display_identifier",
+            params![x, y, width, height, scale, display_identifier],
         ).map_err(error)?;
         Ok(())
     }
 
-    pub fn backup(&self) -> Result<(), String> {
+    pub fn backup(&self) -> Result<PathBuf, String> {
+        self.purge_deleted()?;
         let backup_dir = self.data_dir.join("backups");
         fs::create_dir_all(&backup_dir).map_err(error)?;
-        let destination = backup_dir.join(format!("notes-{}.sqlite", now_ms()));
-        let mut destination_db = Connection::open(destination).map_err(error)?;
+        let destination = backup_dir.join(format!("notes-{}-{}.sqlite", now_ms(), Uuid::new_v4()));
+        let mut destination_db = Connection::open(&destination).map_err(error)?;
         let backup =
             rusqlite::backup::Backup::new(&self.connection, &mut destination_db).map_err(error)?;
         backup
@@ -463,7 +485,7 @@ impl Database {
             .map_err(error)?;
         drop(backup);
         rotate_files(&backup_dir, 5)?;
-        Ok(())
+        Ok(destination)
     }
 
     pub fn export_markdown(&self) -> Result<PathBuf, String> {
@@ -724,10 +746,12 @@ mod tests {
     fn full_text_search_matches_body_content() {
         let mut db = database();
         let first = db.initial_note().unwrap();
-        save(&mut db, &first, "a buried searchable phrase");
+        let body = format!("{} a buried searchable phrase", "prefix ".repeat(80));
+        save(&mut db, &first, &body);
         let pages = db.list_pages("searchable").unwrap();
         assert_eq!(pages.len(), 1);
         assert_eq!(pages[0].id, first.id);
+        assert!(pages[0].snippet.contains("searchable"));
     }
 
     #[test]
@@ -745,5 +769,103 @@ mod tests {
         let around_second = db.neighbors(&second.id).unwrap();
         assert_eq!(around_second.older.unwrap().id, first.id);
         assert!(!around_second.newer.unwrap().persisted);
+    }
+
+    #[test]
+    fn window_state_retains_display_identifier() {
+        let db = database();
+        db.save_window_state(10, 20, 440, 340, 2.0, Some("Display A".to_string()))
+            .unwrap();
+        let saved = db.window_state().unwrap().unwrap();
+        assert_eq!(saved.display_identifier.as_deref(), Some("Display A"));
+    }
+
+    #[test]
+    fn rotating_backup_is_readable_and_keeps_five_files() {
+        let mut db = database();
+        let note = db.initial_note().unwrap();
+        save(&mut db, &note, "recoverable text");
+        let mut latest = None;
+        for _ in 0..7 {
+            latest = Some(db.backup().unwrap());
+        }
+        let backup_dir = db.data_dir.join("backups");
+        assert_eq!(fs::read_dir(&backup_dir).unwrap().count(), 5);
+        let backup = Connection::open(latest.unwrap()).unwrap();
+        let body: String = backup
+            .query_row("SELECT body FROM notes LIMIT 1", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(body, "recoverable text");
+    }
+
+    #[test]
+    fn relaunch_restores_active_page_selection_and_scroll() {
+        let path = std::env::temp_dir().join(format!("not-relaunch-test-{}", Uuid::new_v4()));
+        let note_id;
+        {
+            let mut db = Database::open(path.clone()).unwrap();
+            let note = db.initial_note().unwrap();
+            note_id = note.id.clone();
+            db.save_note(&NoteInput {
+                id: note.id,
+                body: "restored body".to_string(),
+                position: note.position,
+                created_at: note.created_at,
+                cursor_start: 3,
+                cursor_end: 8,
+                scroll_top: 42.5,
+                persisted: note.persisted,
+            })
+            .unwrap();
+        }
+
+        let reopened = Database::open(path).unwrap();
+        let restored = reopened.initial_note().unwrap();
+        assert_eq!(restored.id, note_id);
+        assert_eq!(restored.body, "restored body");
+        assert_eq!((restored.cursor_start, restored.cursor_end), (3, 8));
+        assert_eq!(restored.scroll_top, 42.5);
+    }
+
+    #[test]
+    fn reopening_purges_deleted_pages_older_than_seven_days() {
+        let path = std::env::temp_dir().join(format!("not-purge-test-{}", Uuid::new_v4()));
+        {
+            let mut db = Database::open(path.clone()).unwrap();
+            let note = db.initial_note().unwrap();
+            save(&mut db, &note, "expired trash");
+            db.delete_note(&note.id).unwrap();
+            db.connection
+                .execute(
+                    "UPDATE notes SET deleted_at=?1 WHERE id=?2",
+                    params![now_ms() - TRASH_RETENTION_MS - 1, note.id],
+                )
+                .unwrap();
+            assert!(db.list_deleted().unwrap().is_empty());
+        }
+
+        let reopened = Database::open(path).unwrap();
+        assert_eq!(reopened.active_count().unwrap(), 0);
+        assert!(reopened.list_deleted().unwrap().is_empty());
+    }
+
+    #[test]
+    fn full_text_search_finds_a_buried_match_across_many_large_pages() {
+        let mut db = database();
+        let mut current = db.initial_note().unwrap();
+        for index in 0..120 {
+            let suffix = if index == 117 {
+                " unique-final-needle"
+            } else {
+                ""
+            };
+            let body = format!("page {index} {}{suffix}", "substantial body ".repeat(300));
+            save(&mut db, &current, &body);
+            current = db.navigate(&current.id, 1).unwrap();
+        }
+
+        let pages = db.list_pages("unique-final-needle").unwrap();
+        assert_eq!(pages.len(), 1);
+        assert!(pages[0].snippet.contains("unique-final-needle"));
     }
 }

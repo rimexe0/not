@@ -74,7 +74,7 @@ mark { background: #e7c95b; color: #211d0f; border-radius: 2px; }
 .metrics { color: var(--muted); font: 11px/1.5 ui-monospace, monospace; }
 .panel-action { border-color: var(--border) !important; }
 
-.indicator, .toast {
+.indicator, .toast, .save-error {
   position: absolute; z-index: 5; left: 50%; transform: translateX(-50%);
   border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
   opacity: 0; pointer-events: none;
@@ -83,4 +83,6 @@ mark { background: #e7c95b; color: #211d0f; border-radius: 2px; }
 .indicator.visible { opacity: 1; }
 .toast { bottom: 14px; display: flex; align-items: center; gap: 10px; padding: 7px 9px; font-size: 12px; }
 .toast.visible { opacity: 1; pointer-events: auto; }
-.toast button { border: 0; background: transparent; color: inherit; padding: 0; }
+.save-error { bottom: 14px; display: flex; align-items: center; gap: 10px; padding: 7px 9px; color: var(--danger); font-size: 12px; }
+.save-error.visible { opacity: 1; pointer-events: auto; }
+.toast button, .save-error button { border: 0; background: transparent; color: inherit; padding: 0; }
