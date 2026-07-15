@@ -1,6 +1,6 @@
 [package]
 name = "not"
-version = "0.1.0"
+version = "0.3.0"
 description = "A tiny swipeable scratchpad"
 authors = ["rime"]
 edition = "2024"
@@ -20,6 +20,23 @@ tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 rusqlite = { version = "0.40", features = ["bundled", "backup"] }
 uuid = { version = "1", features = ["v4"] }
+arboard = { version = "3", features = ["image-data"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+png = "0.18"
+sha2 = "0.10"
+shell-words = "1"
+tempfile = "3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSPasteboard", "NSScreen", "NSWindow", "NSWorkspace", "NSRunningApplication"] }
 
 [patch.crates-io]
 global-hotkey = { path = "vendor/global-hotkey" }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+opt-level = "s"
+panic = "abort"
+strip = true

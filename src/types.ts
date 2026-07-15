@@ -17,6 +17,8 @@ export interface InitialState {
   shortcut: string;
   shortcutLabel: string | null;
   launchAtLogin: boolean;
+  fontSize: number;
+  theme: "auto" | "dark" | "light";
 }
 
 export interface NoteInput {
@@ -71,4 +73,51 @@ export interface SummonMetrics {
   visibleP95Micros: number;
   visibleP99Micros: number;
   firstInputCount: number;
+}
+
+export interface Attachment {
+  id: string;
+  noteId: string;
+  mimeType: string;
+  width: number;
+  height: number;
+  byteSize: number;
+  contentHash: string;
+  thumbnailUrl: string;
+}
+
+export interface ClipboardSettings {
+  captureText: boolean;
+  captureImages: boolean;
+  ignoreDuplicates: boolean;
+  ignoreWhitespace: boolean;
+  ignoreSensitive: boolean;
+  minimumTextLength: number;
+  maximumTextLength: number;
+  ignoredApplications: string;
+}
+
+export interface AiSettings {
+  customProgram: string;
+  customArguments: string;
+  lastProvider: ProviderStatus["id"] | null;
+}
+
+export interface ProviderStatus {
+  id: "claude" | "codex" | "custom";
+  displayName: string;
+  available: boolean;
+  executable: string | null;
+}
+
+export interface ClipboardChange {
+  token: string;
+  kind: "text" | "image";
+}
+
+export interface AiResult {
+  markdown: string;
+  provider: ProviderStatus["id"];
+  action: "summarize" | "organize";
+  durationMs: number;
 }
