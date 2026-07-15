@@ -1,0 +1,82 @@
+name: macOS Build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Apple Silicon
+            runner: macos-15
+            artifact: apple-silicon
+          - name: Intel
+            runner: macos-15-intel
+            artifact: intel
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          components: clippy, rustfmt
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Test frontend
+        run: npm test
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+
+      - name: Test Rust
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Lint Rust
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+
+      - name: Compile release binary
+        env:
+          CARGO_BUILD_JOBS: 1
+        run: cargo build --locked --manifest-path src-tauri/Cargo.toml --release --features tauri/custom-protocol
+
+      - name: Build macOS app
+        env:
+          CARGO_BUILD_JOBS: 1
+        run: npm run tauri -- build --no-sign
+
+      - name: Archive app bundle
+        run: tar -czf "not-macos-${{ matrix.artifact }}.tar.gz" -C src-tauri/target/release/bundle/macos not.app
+
+      - name: Upload macOS app
+        uses: actions/upload-artifact@v7
+        with:
+          name: not-macos-${{ matrix.artifact }}-${{ github.sha }}
+          path: not-macos-${{ matrix.artifact }}.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

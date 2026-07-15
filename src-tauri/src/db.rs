@@ -757,6 +757,16 @@ impl Database {
         Ok(current)
     }
 
+    pub fn new_note(&self) -> Result<Note, String> {
+        if let Some(newest) = self.newest_note()?
+            && newest.body.trim().is_empty()
+        {
+            self.set_in("app_state", "active_note_id", &newest.id)?;
+            return Ok(newest);
+        }
+        Ok(self.transient_note(self.next_position()?))
+    }
+
     pub fn neighbors(&self, note_id: &str) -> Result<Neighbors, String> {
         let Some(current) = self.note_by_id(note_id)? else {
             return Ok(Neighbors {
@@ -1383,6 +1393,26 @@ mod tests {
         let same = db.navigate(&blank.id, 1).unwrap();
         assert!(!same.persisted);
         assert_eq!(db.active_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn new_note_skips_existing_pages_and_reuses_an_empty_newest_page() {
+        let mut db = database();
+        let first = db.initial_note().unwrap();
+        save(&mut db, &first, "one");
+        let second = db.navigate(&first.id, 1).unwrap();
+        save(&mut db, &second, "two");
+        db.select_note(&first.id).unwrap();
+
+        let blank = db.new_note().unwrap();
+        assert!(!blank.persisted);
+        assert_eq!(blank.position, second.position + 1);
+        save(&mut db, &blank, "");
+        assert_eq!(db.active_count().unwrap(), 2);
+
+        let saved_second = db.select_note(&second.id).unwrap();
+        save(&mut db, &saved_second, "");
+        assert_eq!(db.new_note().unwrap().id, second.id);
     }
 
     #[test]

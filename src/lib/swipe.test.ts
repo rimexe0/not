@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SwipeTracker } from "./swipe";
+import { SwipeTracker, WheelStepTracker } from "./swipe";
 
 describe("SwipeTracker", () => {
   it("ignores vertical and diagonal scrolling", () => {
@@ -55,5 +55,19 @@ describe("SwipeTracker", () => {
     swipe.suppressMomentum(1);
     expect(swipe.push(-80, 0)).toEqual({ direction: -1, distance: 80 });
     swipe.reset();
+  });
+});
+
+describe("WheelStepTracker", () => {
+  it("turns one shifted wheel burst into one page step", () => {
+    vi.useFakeTimers();
+    const wheel = new WheelStepTracker(100);
+    expect(wheel.push(0, 3)).toBe(1);
+    expect(wheel.push(0, 8)).toBe(0);
+    expect(wheel.push(12, 0)).toBe(0);
+    vi.advanceTimersByTime(101);
+    expect(wheel.push(-4, 0)).toBe(-1);
+    wheel.reset();
+    vi.useRealTimers();
   });
 });

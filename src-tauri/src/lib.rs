@@ -696,6 +696,11 @@ async fn navigate(
 }
 
 #[tauri::command]
+async fn new_note(state: State<'_, RuntimeState>) -> Result<Note, String> {
+    database_task(&state, |db| db.new_note()).await
+}
+
+#[tauri::command]
 async fn neighbors(note_id: String, state: State<'_, RuntimeState>) -> Result<Neighbors, String> {
     database_task(&state, move |db| db.neighbors(&note_id)).await
 }
@@ -1496,6 +1501,7 @@ pub fn run() {
             update_draft,
             update_draft_view,
             navigate,
+            new_note,
             neighbors,
             select_note,
             delete_note,

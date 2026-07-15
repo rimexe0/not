@@ -85,3 +85,29 @@ export class SwipeTracker {
     };
   }
 }
+
+export class WheelStepTracker {
+  private locked = false;
+  private unlockTimer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(private readonly idleMs = 120) {}
+
+  push(deltaX: number, deltaY: number): -1 | 0 | 1 {
+    const delta = Math.abs(deltaX) >= Math.abs(deltaY) ? deltaX : deltaY;
+    if (delta === 0) return 0;
+    clearTimeout(this.unlockTimer);
+    this.unlockTimer = setTimeout(() => {
+      this.locked = false;
+      this.unlockTimer = undefined;
+    }, this.idleMs);
+    if (this.locked) return 0;
+    this.locked = true;
+    return delta > 0 ? 1 : -1;
+  }
+
+  reset(): void {
+    this.locked = false;
+    clearTimeout(this.unlockTimer);
+    this.unlockTimer = undefined;
+  }
+}

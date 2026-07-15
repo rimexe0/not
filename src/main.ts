@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { SwipeTracker } from "./lib/swipe";
+import { SwipeTracker, WheelStepTracker } from "./lib/swipe";
 import { formatShortcut, recordShortcut } from "./lib/shortcut";
 import { commandMatches } from "./lib/commands";
 import { ScratchpadEditor } from "./editor";
@@ -74,6 +74,7 @@ const paletteSearch = required<HTMLInputElement>(".palette-search");
 const paletteList = required<HTMLElement>(".palette-list");
 const currentWindow = getCurrentWindow();
 const swipe = new SwipeTracker();
+const shiftedWheel = new WheelStepTracker();
 const editor = new ScratchpadEditor(editorHost, {
   input: handleEditorInput,
   selection: handleEditorSelection,
@@ -339,6 +340,23 @@ async function navigate(direction: -1 | 1, rapid = false, skipAnimation = false)
       queuedKeyboardNavigation -= queuedDirection;
       void navigate(queuedDirection, true, true);
     }
+  }
+}
+
+async function createNewNote(): Promise<void> {
+  if (busy) return;
+  if (panelMode) await closePanel();
+  if (!note.persisted && editor.value.trim() === "") {
+    editor.focus({ preventScroll: true });
+    return;
+  }
+  busy = true;
+  try {
+    if (!await flushSave()) return;
+    cleanupSwipe();
+    displayNote(await invoke<Note>("new_note"));
+  } finally {
+    busy = false;
   }
 }
 
@@ -1137,6 +1155,15 @@ function handleBeforeInput(): void {
 
 editor.dom.addEventListener("wheel", (event) => {
   if (panelMode) return;
+  if (event.shiftKey) {
+    event.preventDefault();
+    const direction = shiftedWheel.push(event.deltaX, event.deltaY);
+    if (direction === 0) return;
+    swipe.reset();
+    if (swipeDirection !== 0 && !busy) cleanupSwipe();
+    void navigate(direction, true);
+    return;
+  }
   const horizontal = Math.abs(event.deltaX) > Math.abs(event.deltaY) * 1.2;
   const update = swipe.push(event.deltaX, event.deltaY);
   if (!horizontal) return;
@@ -1215,6 +1242,12 @@ window.addEventListener("keydown", (event) => {
   if (event.metaKey && event.shiftKey && event.key.toLowerCase() === "p") {
     event.preventDefault();
     void openCommandPalette();
+  } else if (event.metaKey && !event.shiftKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === "t") {
+    event.preventDefault();
+    void createNewNote();
+  } else if (event.metaKey && !event.shiftKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === "w") {
+    event.preventDefault();
+    void hideWindow();
   } else if (event.metaKey && event.key.toLowerCase() === "k") {
     event.preventDefault();
     void openPanel("pages");
