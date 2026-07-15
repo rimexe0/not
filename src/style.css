@@ -36,7 +36,7 @@
 }
 
 :root[data-material="glass"] {
-  --background: transparent;
+  --background: var(--glass-dark-background, transparent);
   --surface: rgba(34, 34, 38, 0.48);
   --text: #f7f7f8;
   --muted: rgba(235, 235, 245, 0.68);
@@ -47,6 +47,7 @@
 @media (prefers-color-scheme: light) {
   :root[data-theme="auto"][data-material="glass"] {
     color-scheme: light;
+    --background: var(--glass-light-background, transparent);
     --surface: rgba(255, 255, 255, 0.52);
     --text: #1d1d1f;
     --muted: rgba(60, 60, 67, 0.72);
@@ -57,6 +58,7 @@
 
 :root[data-theme="light"][data-material="glass"] {
   color-scheme: light;
+  --background: var(--glass-light-background, transparent);
   --surface: rgba(255, 255, 255, 0.52);
   --text: #1d1d1f;
   --muted: rgba(60, 60, 67, 0.72);
@@ -74,6 +76,7 @@ button { color: inherit; }
 .layout { position: relative; display: flex; width: 100%; height: 100%; overflow: hidden; border-radius: var(--window-radius); background: var(--background); }
 .layout.panel-left { flex-direction: row-reverse; }
 .editor-shell { position: relative; flex: 1 1 auto; min-width: 280px; height: 100%; background: var(--background); overflow: hidden; }
+:root[data-material="glass"] .editor-shell { background: transparent; }
 .editor {
   position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; background: transparent; color: var(--text);
   font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: var(--editor-font-size); line-height: 1.55;

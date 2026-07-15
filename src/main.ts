@@ -139,6 +139,19 @@ function applyFontSize(): void {
 function applyTheme(): void {
   document.documentElement.dataset.theme = theme;
   document.documentElement.dataset.material = glassSettings.enabled ? "glass" : "solid";
+  document.documentElement.style.setProperty(
+    "--glass-dark-background",
+    tintBackground(glassSettings.darkTint, glassSettings.opacity),
+  );
+  document.documentElement.style.setProperty(
+    "--glass-light-background",
+    tintBackground(glassSettings.lightTint, glassSettings.opacity),
+  );
+}
+
+function tintBackground(hex: string, opacity: number): string {
+  const component = (start: number): number => Number.parseInt(hex.slice(start, start + 2), 16);
+  return `rgba(${component(1)}, ${component(3)}, ${component(5)}, ${opacity / 100})`;
 }
 
 function showToolbar(): void {
@@ -503,6 +516,11 @@ async function openPanel(mode: "pages" | "settings" | "ai"): Promise<void> {
   const title = mode === "pages" ? "Pages" : mode === "settings" ? "Settings" : "AI";
   panel.innerHTML = `<div class="panel-header"><h2>${title}</h2><button class="panel-close" type="button" aria-label="Close">×</button></div><div class="panel-content"></div>`;
   layout.append(panel);
+  panel.addEventListener("pointerdown", (event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest("button, input, textarea, select, a, label, .cm-editor, [contenteditable=true]")) return;
+    startDragging(event);
+  });
   panel.querySelector(".panel-close")?.addEventListener("click", () => void closePanel());
   if (mode === "pages") await renderPages("");
   else if (mode === "settings") await renderSettings();
