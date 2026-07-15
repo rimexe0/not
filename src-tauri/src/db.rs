@@ -8,6 +8,8 @@ use std::{
 };
 use uuid::Uuid;
 
+use crate::clipboard::{THUMBNAIL_MAX_HEIGHT, THUMBNAIL_MAX_WIDTH};
+
 const TRASH_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 #[derive(Debug, Clone, Serialize)]
@@ -451,7 +453,7 @@ impl Database {
         fs::create_dir_all(&attachment_dir).map_err(error)?;
         let filename = format!("{attachment_id}.png");
         let final_path = attachment_dir.join(&filename);
-        let thumbnail_filename = format!("{attachment_id}.thumb.png");
+        let thumbnail_filename = format!("{attachment_id}.thumb-v2.png");
         let thumbnail_final_path = attachment_dir.join(&thumbnail_filename);
         let temporary_path = attachment_dir.join(format!(".{attachment_id}.tmp"));
         let thumbnail_temporary_path = attachment_dir.join(format!(".{attachment_id}.thumb.tmp"));
@@ -623,17 +625,22 @@ impl Database {
         let (original_filename, thumbnail_filename, _mime_type) = record;
         validate_filename(&original_filename)?;
         let attachment_dir = self.data_dir.join("attachments");
-        if let Some(filename) = thumbnail_filename {
-            validate_filename(&filename)?;
+        if let Some(filename) = thumbnail_filename.as_deref() {
+            validate_filename(filename)?;
             let path = attachment_dir.join(filename);
-            if path.is_file() {
+            if filename.ends_with(".thumb-v2.png") && path.is_file() {
                 return Ok((fs::read(path).map_err(error)?, "image/png".to_string()));
             }
         }
-        let original = fs::read(attachment_dir.join(&original_filename)).map_err(error)?;
-        let decoded = image::load_from_memory(&original).map_err(error)?;
-        let thumbnail = decoded.thumbnail(1_200, 900);
-        let filename = format!("{id}.thumb.png");
+        let source_path = thumbnail_filename
+            .as_deref()
+            .map(|filename| attachment_dir.join(filename))
+            .filter(|path| path.is_file())
+            .unwrap_or_else(|| attachment_dir.join(&original_filename));
+        let source = fs::read(source_path).map_err(error)?;
+        let decoded = image::load_from_memory(&source).map_err(error)?;
+        let thumbnail = decoded.thumbnail(THUMBNAIL_MAX_WIDTH, THUMBNAIL_MAX_HEIGHT);
+        let filename = format!("{id}.thumb-v2.png");
         let path = attachment_dir.join(&filename);
         thumbnail
             .save_with_format(&path, ImageFormat::Png)
@@ -644,6 +651,11 @@ impl Database {
                 params![filename, id],
             )
             .map_err(error)?;
+        if let Some(old_filename) = thumbnail_filename
+            && old_filename != filename
+        {
+            let _ = fs::remove_file(attachment_dir.join(old_filename));
+        }
         Ok((fs::read(path).map_err(error)?, "image/png".to_string()))
     }
 

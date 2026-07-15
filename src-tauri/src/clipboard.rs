@@ -1,6 +1,9 @@
 use arboard::Clipboard;
 use sha2::{Digest, Sha256};
 
+pub(crate) const THUMBNAIL_MAX_WIDTH: u32 = 800;
+pub(crate) const THUMBNAIL_MAX_HEIGHT: u32 = 600;
+
 pub enum ClipboardContent {
     Text { body: String, hash: String },
     Image(CapturedImage),
@@ -51,7 +54,8 @@ fn encode_image(width: usize, height: usize, rgba: &[u8]) -> Result<CapturedImag
     let width = u32::try_from(width).map_err(|_| "clipboard image is too wide".to_string())?;
     let height = u32::try_from(height).map_err(|_| "clipboard image is too tall".to_string())?;
     let png = encode_rgba_png(width, height, rgba)?;
-    let (thumbnail_width, thumbnail_height) = bounded_dimensions(width, height, 1_200, 900);
+    let (thumbnail_width, thumbnail_height) =
+        bounded_dimensions(width, height, THUMBNAIL_MAX_WIDTH, THUMBNAIL_MAX_HEIGHT);
     let thumbnail_rgba = if (thumbnail_width, thumbnail_height) == (width, height) {
         rgba.to_vec()
     } else {
@@ -162,7 +166,7 @@ fn error(value: impl std::fmt::Display) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{content_hash, encode_image};
+    use super::{bounded_dimensions, content_hash, encode_image};
 
     #[test]
     fn image_encoding_is_png_and_stably_hashed() {
@@ -181,5 +185,11 @@ mod tests {
             content_hash(b"text", b"same"),
             content_hash(b"image", b"same")
         );
+    }
+
+    #[test]
+    fn thumbnails_are_bounded_for_the_editor_view() {
+        assert_eq!(bounded_dimensions(1_600, 1_200, 800, 600), (800, 600));
+        assert_eq!(bounded_dimensions(400, 300, 800, 600), (400, 300));
     }
 }

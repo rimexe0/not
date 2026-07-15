@@ -117,6 +117,7 @@ let aiResultEditor: ScratchpadEditor | null = null;
 let clipboardActive = false;
 let rememberedCaretLineEnd = 0;
 let clipboardAppendQueue: Promise<void> = Promise.resolve();
+let scratchpadVisible = false;
 
 function required<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -229,14 +230,15 @@ function displayNote(next: Note): void {
   });
   showIndicator();
   scheduleNeighborPreload();
-  void renderAttachments(next.id);
+  if (scratchpadVisible) void renderAttachments(next.id);
 }
 
 async function renderAttachments(noteId: string): Promise<void> {
+  if (!scratchpadVisible) return;
   const requestId = ++attachmentRequestId;
   try {
     const attachments = await invoke<Attachment[]>("list_attachments", { noteId });
-    if (requestId !== attachmentRequestId || note.id !== noteId) return;
+    if (!scratchpadVisible || requestId !== attachmentRequestId || note.id !== noteId) return;
     editor.setAttachments(attachments);
   } catch {
     if (requestId === attachmentRequestId) editor.setAttachments([]);
@@ -985,8 +987,21 @@ async function hideWindow(): Promise<void> {
   if (!await flushSave()) return;
   closeCommandPalette();
   if (panelMode) await closePanel();
+  scratchpadVisible = false;
+  releaseHiddenResources();
   await invoke("save_window_state");
   await invoke("hide_window");
+}
+
+function releaseHiddenResources(): void {
+  attachmentRequestId += 1;
+  editor.setAttachments([]);
+  neighborRequestId += 1;
+  neighborPages = undefined;
+  queuedKeyboardNavigation = 0;
+  pagePreview.textContent = "";
+  cleanupSwipe();
+  destroyAiResultEditor();
 }
 
 function handleEditorInput(): void {
@@ -1076,9 +1091,9 @@ toolbarDrag.addEventListener("pointerdown", startDragging);
 
 layout.addEventListener("click", (event) => {
   const action = (event.target as HTMLElement).closest<HTMLElement>("[data-action]")?.dataset.action;
-  if (action === "pages") void openPanel("pages");
-  if (action === "ai") void openAi();
-  if (action === "settings") void openPanel("settings");
+  if (action === "pages") void (panelMode === "pages" ? closePanel() : openPanel("pages"));
+  if (action === "ai") void (panelMode === "ai" ? closePanel() : openAi());
+  if (action === "settings") void (panelMode === "settings" ? closePanel() : openPanel("settings"));
   if (action === "delete") void deleteCurrent();
   if (action === "undo") void undoDelete();
   if (action === "retry-save") void retryStorageOperation();
@@ -1154,7 +1169,9 @@ void currentWindow.onResized(persistGeometry);
 void listen("shortcut-hide", () => void hideWindow());
 void listen<number>("shortcut-show", ({ payload: sequence }) => {
   activeSummonSequence = sequence;
+  scratchpadVisible = true;
   startClipboardWatcher();
+  void renderAttachments(note.id);
   requestAnimationFrame(() => void invoke("record_visible_frame", { sequence }));
 });
 void listen<ClipboardChange>("clipboard-change", ({ payload }) => {
