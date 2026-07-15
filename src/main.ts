@@ -13,6 +13,7 @@ import type {
   ClipboardSettings,
   DeleteResult,
   DeletedPage,
+  GlassSettings,
   InitialState,
   Neighbors,
   Note,
@@ -87,6 +88,12 @@ let shortcutDisplay = formatShortcut(shortcut);
 let launchAtLogin = true;
 let fontSize = 15;
 let theme: InitialState["theme"] = "auto";
+let glassSettings: GlassSettings = {
+  enabled: false,
+  darkTint: "#161619",
+  lightTint: "#F5F5F7",
+  opacity: 28,
+};
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let saveQueue: Promise<boolean> = Promise.resolve(true);
 let indicatorTimer: ReturnType<typeof setTimeout> | undefined;
@@ -131,6 +138,7 @@ function applyFontSize(): void {
 
 function applyTheme(): void {
   document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.material = glassSettings.enabled ? "glass" : "solid";
 }
 
 function showToolbar(): void {
@@ -606,6 +614,15 @@ async function renderSettings(): Promise<void> {
     <div class="setting"><strong>Command palette</strong><small>Press ⌘⇧P for export and page navigation.</small></div>
     <label class="setting">Global shortcut<input class="setting-input shortcut-recorder" data-setting="shortcut" value="${escapeAttribute(shortcutDisplay)}" readonly><small>Click, then press a key combination.</small><small class="setting-error"></small></label>
     <label class="setting-row setting"><span>Theme</span><select class="setting-select" data-setting="theme"><option value="auto" ${theme === "auto" ? "selected" : ""}>Auto</option><option value="dark" ${theme === "dark" ? "selected" : ""}>Dark</option><option value="light" ${theme === "light" ? "selected" : ""}>Light</option></select></label>
+    <div class="glass-settings setting-section">
+      <label class="setting-row setting"><strong>Liquid Glass · experimental</strong><input type="checkbox" data-glass="enabled" ${glassSettings.enabled ? "checked" : ""}></label>
+      <div class="glass-controls" ${glassSettings.enabled ? "" : "hidden"}>
+        <small>Glass can be combined with any color theme. Auto follows macOS. Set opacity to 0% for no color tint.</small>
+        <label class="setting-row setting"><span>Dark tint</span><input class="glass-color" type="color" data-glass="darkTint" value="${escapeAttribute(glassSettings.darkTint)}"></label>
+        <label class="setting-row setting"><span>Light tint</span><input class="glass-color" type="color" data-glass="lightTint" value="${escapeAttribute(glassSettings.lightTint)}"></label>
+        <label class="setting-row setting"><span>Opacity <output data-glass-opacity>${glassSettings.opacity}%</output></span><input class="glass-opacity" type="range" min="0" max="100" step="1" data-glass="opacity" value="${glassSettings.opacity}"></label>
+      </div>
+    </div>
     <label class="setting-row setting"><span>Font size</span><select class="setting-select" data-setting="font-size">${fontSizeOptions()}</select></label>
     <label class="setting-row setting"><span>Launch at login</span><input type="checkbox" data-setting="autostart" ${launchAtLogin ? "checked" : ""}></label>
     <div class="setting"><button class="panel-action" type="button" data-setting="export">Export Markdown</button><small class="export-result"></small></div>
@@ -715,6 +732,50 @@ async function renderSettings(): Promise<void> {
       applyTheme();
     }
   });
+  const saveGlassSettings = async (): Promise<void> => {
+    const darkTint = content.querySelector<HTMLInputElement>("[data-glass=darkTint]");
+    const lightTint = content.querySelector<HTMLInputElement>("[data-glass=lightTint]");
+    const opacity = content.querySelector<HTMLInputElement>("[data-glass=opacity]");
+    const enabled = content.querySelector<HTMLInputElement>("[data-glass=enabled]");
+    if (!darkTint || !lightTint || !opacity || !enabled) return;
+    const previous = glassSettings;
+    glassSettings = {
+      enabled: enabled.checked,
+      darkTint: darkTint.value,
+      lightTint: lightTint.value,
+      opacity: Number(opacity.value),
+    };
+    applyTheme();
+    try {
+      glassSettings = await invoke<GlassSettings>("set_glass_settings", { settings: glassSettings });
+      darkTint.value = glassSettings.darkTint;
+      lightTint.value = glassSettings.lightTint;
+      opacity.value = String(glassSettings.opacity);
+      enabled.checked = glassSettings.enabled;
+    } catch {
+      glassSettings = previous;
+      darkTint.value = previous.darkTint;
+      lightTint.value = previous.lightTint;
+      opacity.value = String(previous.opacity);
+      enabled.checked = previous.enabled;
+      applyTheme();
+    }
+    const output = content.querySelector<HTMLOutputElement>("[data-glass-opacity]");
+    if (output) output.value = `${glassSettings.opacity}%`;
+  };
+  content.querySelector<HTMLInputElement>("[data-glass=enabled]")?.addEventListener("change", (event) => {
+    const enabled = (event.currentTarget as HTMLInputElement).checked;
+    const controls = content.querySelector<HTMLElement>(".glass-controls");
+    if (controls) controls.hidden = !enabled;
+    void saveGlassSettings();
+  });
+  content.querySelector<HTMLInputElement>("[data-glass=darkTint]")?.addEventListener("change", () => void saveGlassSettings());
+  content.querySelector<HTMLInputElement>("[data-glass=lightTint]")?.addEventListener("change", () => void saveGlassSettings());
+  content.querySelector<HTMLInputElement>("[data-glass=opacity]")?.addEventListener("input", (event) => {
+    const output = content.querySelector<HTMLOutputElement>("[data-glass-opacity]");
+    if (output) output.value = `${(event.currentTarget as HTMLInputElement).value}%`;
+  });
+  content.querySelector<HTMLInputElement>("[data-glass=opacity]")?.addEventListener("change", () => void saveGlassSettings());
   content.querySelector("[data-setting=export]")?.addEventListener("click", async () => {
     const path = await invoke<string>("export_notes");
     const result = content.querySelector<HTMLElement>(".export-result");
@@ -1230,6 +1291,7 @@ async function start(): Promise<void> {
   launchAtLogin = initial.launchAtLogin;
   fontSize = initial.fontSize;
   theme = initial.theme;
+  glassSettings = initial.glassSettings;
   applyFontSize();
   applyTheme();
   displayNote(initial.note);

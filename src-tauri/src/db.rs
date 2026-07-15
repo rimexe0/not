@@ -12,6 +12,25 @@ use crate::clipboard::{THUMBNAIL_MAX_HEIGHT, THUMBNAIL_MAX_WIDTH};
 
 const TRASH_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
+fn normalize_glass_settings(mut settings: GlassSettings) -> Result<GlassSettings, String> {
+    settings.dark_tint = normalize_tint(&settings.dark_tint)?;
+    settings.light_tint = normalize_tint(&settings.light_tint)?;
+    settings.opacity = settings.opacity.min(100);
+    Ok(settings)
+}
+
+fn normalize_tint(value: &str) -> Result<String, String> {
+    if value.len() != 7
+        || !value.starts_with('#')
+        || !value[1..]
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        return Err("invalid glass tint".to_string());
+    }
+    Ok(value.to_ascii_uppercase())
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Note {
@@ -114,6 +133,27 @@ pub struct AiSettings {
     pub custom_program: String,
     pub custom_arguments: String,
     pub last_provider: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+#[serde(rename_all = "camelCase")]
+pub struct GlassSettings {
+    pub enabled: bool,
+    pub dark_tint: String,
+    pub light_tint: String,
+    pub opacity: u8,
+}
+
+impl Default for GlassSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            dark_tint: "#161619".to_string(),
+            light_tint: "#F5F5F7".to_string(),
+            opacity: 28,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -915,6 +955,33 @@ impl Database {
         Ok(value.to_string())
     }
 
+    pub fn glass_settings(&self) -> Result<GlassSettings, String> {
+        let Some(value) = self.setting_from("settings", "glass_settings")? else {
+            return Ok(GlassSettings {
+                enabled: self.setting_from("settings", "theme")?.as_deref() == Some("glass"),
+                ..GlassSettings::default()
+            });
+        };
+        let mut settings = serde_json::from_str::<GlassSettings>(&value).unwrap_or_default();
+        if let Ok(stored) = serde_json::from_str::<serde_json::Value>(&value)
+            && let Some(tint) = stored.get("tint").and_then(|value| value.as_str())
+        {
+            settings.dark_tint = tint.to_string();
+            settings.light_tint = tint.to_string();
+        }
+        Ok(normalize_glass_settings(settings).unwrap_or_default())
+    }
+
+    pub fn set_glass_settings(&self, settings: GlassSettings) -> Result<GlassSettings, String> {
+        let settings = normalize_glass_settings(settings)?;
+        self.set_in(
+            "settings",
+            "glass_settings",
+            &serde_json::to_string(&settings).map_err(error)?,
+        )?;
+        Ok(settings)
+    }
+
     pub fn clipboard_settings(&self) -> Result<ClipboardSettings, String> {
         let Some(value) = self.setting_from("settings", "clipboard_settings")? else {
             return Ok(ClipboardSettings::default());
@@ -1597,7 +1664,62 @@ mod tests {
         assert_eq!(db.theme().unwrap(), "auto");
         assert_eq!(db.set_theme("light").unwrap(), "light");
         assert_eq!(db.theme().unwrap(), "light");
+        assert!(db.set_theme("glass").is_err());
         assert!(db.set_theme("sepia").is_err());
+    }
+
+    #[test]
+    fn glass_settings_are_validated_and_persisted() {
+        let db = database();
+        assert_eq!(db.glass_settings().unwrap(), GlassSettings::default());
+        let settings = GlassSettings {
+            enabled: true,
+            dark_tint: "#abcdef".to_string(),
+            light_tint: "#fedcba".to_string(),
+            opacity: 0,
+        };
+        assert_eq!(
+            db.set_glass_settings(settings).unwrap(),
+            GlassSettings {
+                enabled: true,
+                dark_tint: "#ABCDEF".to_string(),
+                light_tint: "#FEDCBA".to_string(),
+                opacity: 0,
+            }
+        );
+        assert_eq!(db.glass_settings().unwrap().dark_tint, "#ABCDEF");
+        assert!(
+            db.set_glass_settings(GlassSettings {
+                enabled: true,
+                dark_tint: "transparent".to_string(),
+                light_tint: "#FFFFFF".to_string(),
+                opacity: 20,
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn legacy_glass_theme_migrates_to_auto_with_glass_enabled() {
+        let db = database();
+        db.set_in("settings", "theme", "glass").unwrap();
+        assert_eq!(db.theme().unwrap(), "auto");
+        assert!(db.glass_settings().unwrap().enabled);
+    }
+
+    #[test]
+    fn legacy_single_glass_tint_seeds_both_color_themes() {
+        let db = database();
+        db.set_in(
+            "settings",
+            "glass_settings",
+            r##"{"enabled":true,"tint":"#123456","opacity":40}"##,
+        )
+        .unwrap();
+        let settings = db.glass_settings().unwrap();
+        assert_eq!(settings.dark_tint, "#123456");
+        assert_eq!(settings.light_tint, "#123456");
+        assert_eq!(settings.opacity, 40);
     }
 
     #[test]

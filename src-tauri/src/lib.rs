@@ -5,8 +5,8 @@ mod db;
 use ai::ProviderStatus;
 use clipboard::ClipboardContent;
 use db::{
-    AiSettings, Attachment, ClipboardSettings, Database, DeletedPage, Neighbors, Note, NoteInput,
-    PageSummary, SaveResult, SavedWindowState,
+    AiSettings, Attachment, ClipboardSettings, Database, DeletedPage, GlassSettings, Neighbors,
+    Note, NoteInput, PageSummary, SaveResult, SavedWindowState,
 };
 use serde::Serialize;
 use std::{
@@ -19,11 +19,20 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{
-    AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, RunEvent, State,
+    AppHandle, Emitter, Manager, Monitor, PhysicalPosition, PhysicalSize, RunEvent, State, Theme,
     WebviewWindow, WindowEvent,
 };
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartExt};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+#[cfg(target_os = "macos")]
+use objc2_app_kit::NSView;
+#[cfg(target_os = "macos")]
+use tauri::window::{Effect, EffectState, EffectsBuilder};
+#[cfg(target_os = "macos")]
+use window_vibrancy::{
+    LiquidGlassOptions, NSGlassEffectViewStyle, apply_liquid_glass, clear_liquid_glass,
+};
 
 const PANEL_WIDTH_LOGICAL: f64 = 300.0;
 
@@ -80,6 +89,7 @@ struct InitialState {
     launch_at_login: bool,
     font_size: i64,
     theme: String,
+    glass_settings: GlassSettings,
 }
 
 #[derive(Serialize)]
@@ -563,12 +573,69 @@ fn safe_external_url(url: &str) -> bool {
         && !url.chars().any(char::is_whitespace)
 }
 
+#[cfg(target_os = "macos")]
+fn glass_tint(settings: &GlassSettings, light: bool) -> (u8, u8, u8, u8) {
+    let tint = if light {
+        &settings.light_tint
+    } else {
+        &settings.dark_tint
+    };
+    let component = |range| u8::from_str_radix(&tint[range], 16).unwrap_or_default();
+    let alpha = ((u16::from(settings.opacity) * 255 + 50) / 100) as u8;
+    (component(1..3), component(3..5), component(5..7), alpha)
+}
+
+fn apply_window_material(
+    window: &WebviewWindow,
+    color_theme: &str,
+    system_theme: Theme,
+    glass_settings: &GlassSettings,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let glass_enabled = glass_settings.enabled;
+        let light =
+            color_theme == "light" || (color_theme == "auto" && system_theme == Theme::Light);
+        let tint = glass_tint(glass_settings, light);
+        let window = window.clone();
+        window
+            .clone()
+            .with_webview(move |webview| {
+                let empty_effects = || EffectsBuilder::new().build();
+                let _ = clear_liquid_glass(&window);
+                if !glass_enabled {
+                    let _ = window.set_effects(empty_effects());
+                    return;
+                }
+
+                let _ = window.set_effects(empty_effects());
+                let webview = unsafe { &*webview.inner().cast::<NSView>() };
+                let options = LiquidGlassOptions::new(NSGlassEffectViewStyle::Clear)
+                    .tint_color(tint)
+                    .radius(14.0)
+                    .content_view(webview);
+                if apply_liquid_glass(&window, options).is_err() {
+                    let fallback = EffectsBuilder::new()
+                        .effect(Effect::UnderWindowBackground)
+                        .state(EffectState::FollowsWindowActiveState)
+                        .radius(14.0)
+                        .build();
+                    let _ = window.set_effects(fallback);
+                }
+            })
+            .map_err(|error| error.to_string())?;
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = (window, color_theme, system_theme, glass_settings);
+    Ok(())
+}
+
 #[tauri::command]
 async fn load_initial_state(
     app: AppHandle,
     state: State<'_, RuntimeState>,
 ) -> Result<InitialState, String> {
-    let (note, shortcut, shortcut_label, launch_at_login, font_size, theme) =
+    let (note, shortcut, shortcut_label, launch_at_login, font_size, theme, glass_settings) =
         database_task(&state, |db| {
             Ok((
                 db.initial_note()?,
@@ -577,6 +644,7 @@ async fn load_initial_state(
                 db.launch_at_login()?,
                 db.font_size()?,
                 db.theme()?,
+                db.glass_settings()?,
             ))
         })
         .await?;
@@ -588,6 +656,7 @@ async fn load_initial_state(
         launch_at_login: launch_at_login && actual_autostart,
         font_size,
         theme,
+        glass_settings,
     })
 }
 
@@ -738,8 +807,33 @@ async fn set_font_size(value: i64, state: State<'_, RuntimeState>) -> Result<i64
 }
 
 #[tauri::command]
-async fn set_theme(value: String, state: State<'_, RuntimeState>) -> Result<String, String> {
-    database_task(&state, move |db| db.set_theme(&value)).await
+async fn set_theme(
+    value: String,
+    window: WebviewWindow,
+    state: State<'_, RuntimeState>,
+) -> Result<String, String> {
+    let (theme, glass_settings) = database_task(&state, move |db| {
+        Ok((db.set_theme(&value)?, db.glass_settings()?))
+    })
+    .await?;
+    let system_theme = window.theme().unwrap_or(Theme::Dark);
+    apply_window_material(&window, &theme, system_theme, &glass_settings)?;
+    Ok(theme)
+}
+
+#[tauri::command]
+async fn set_glass_settings(
+    settings: GlassSettings,
+    window: WebviewWindow,
+    state: State<'_, RuntimeState>,
+) -> Result<GlassSettings, String> {
+    let (settings, theme) = database_task(&state, move |db| {
+        Ok((db.set_glass_settings(settings)?, db.theme()?))
+    })
+    .await?;
+    let system_theme = window.theme().unwrap_or(Theme::Dark);
+    apply_window_material(&window, &theme, system_theme, &settings)?;
+    Ok(settings)
 }
 
 #[tauri::command]
@@ -1415,6 +1509,7 @@ pub fn run() {
             set_autostart,
             set_font_size,
             set_theme,
+            set_glass_settings,
             set_panel,
             save_window_state,
             export_notes,
@@ -1449,6 +1544,8 @@ pub fn run() {
             let database = Database::open(data_dir)?;
             let shortcut = database.shortcut()?;
             let launch_at_login = database.launch_at_login()?;
+            let theme = database.theme()?;
+            let glass_settings = database.glass_settings()?;
             let _ = database.backup();
             app.manage(RuntimeState::new(database));
 
@@ -1463,16 +1560,37 @@ pub fn run() {
             let state = app.state::<RuntimeState>();
             restore_window(&window, &state);
             configure_native_scratchpad_window(&window);
+            let system_theme = window.theme().unwrap_or(Theme::Dark);
+            apply_window_material(&window, &theme, system_theme, &glass_settings)?;
             window.set_always_on_top(true)?;
             window.set_maximizable(false)?;
             window.set_fullscreen(false)?;
             window.on_window_event({
                 let window = window.clone();
-                move |event| {
-                    if let WindowEvent::CloseRequested { api, .. } = event {
+                move |event| match event {
+                    WindowEvent::CloseRequested { api, .. } => {
                         api.prevent_close();
                         let _ = window.emit("shortcut-hide", ());
                     }
+                    WindowEvent::ThemeChanged(system_theme) => {
+                        let state = window.state::<RuntimeState>();
+                        let appearance = state
+                            .db
+                            .lock()
+                            .ok()
+                            .and_then(|db| Some((db.theme().ok()?, db.glass_settings().ok()?)));
+                        if let Some((theme, glass_settings)) = appearance
+                            && theme == "auto"
+                        {
+                            let _ = apply_window_material(
+                                &window,
+                                &theme,
+                                *system_theme,
+                                &glass_settings,
+                            );
+                        }
+                    }
+                    _ => {}
                 }
             });
             Ok(())

@@ -30,6 +30,7 @@ tempfile = "3"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSEvent", "NSPasteboard", "NSScreen", "NSWindow", "NSWorkspace", "NSRunningApplication"] }
+window-vibrancy = { git = "https://github.com/tauri-apps/window-vibrancy", rev = "e41550bf6482b3d51517478a822bb8b9f31626ca" }
 
 [patch.crates-io]
 global-hotkey = { path = "vendor/global-hotkey" }

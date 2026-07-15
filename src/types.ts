@@ -19,6 +19,14 @@ export interface InitialState {
   launchAtLogin: boolean;
   fontSize: number;
   theme: "auto" | "dark" | "light";
+  glassSettings: GlassSettings;
+}
+
+export interface GlassSettings {
+  enabled: boolean;
+  darkTint: string;
+  lightTint: string;
+  opacity: number;
 }
 
 export interface NoteInput {
