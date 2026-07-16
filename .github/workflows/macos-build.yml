@@ -1,30 +1,20 @@
-name: macOS Build
+name: macOS Release
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: macos-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build (${{ matrix.name }})
-    runs-on: ${{ matrix.runner }}
+  release:
+    name: Build and release (Apple Silicon)
+    runs-on: macos-15
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Apple Silicon
-            runner: macos-15
-            artifact: apple-silicon
-          - name: Intel
-            runner: macos-15-intel
-            artifact: intel
 
     steps:
       - name: Check out repository
@@ -67,16 +57,23 @@ jobs:
       - name: Build macOS app
         env:
           CARGO_BUILD_JOBS: 1
-        run: npm run tauri -- build --no-sign
+        run: npm run tauri -- build
 
       - name: Archive app bundle
-        run: tar -czf "not-macos-${{ matrix.artifact }}.tar.gz" -C src-tauri/target/release/bundle/macos not.app
+        run: tar -czf not-macos-apple-silicon.tar.gz -C src-tauri/target/release/bundle/macos not.app
 
-      - name: Upload macOS app
-        uses: actions/upload-artifact@v7
-        with:
-          name: not-macos-${{ matrix.artifact }}-${{ github.sha }}
-          path: not-macos-${{ matrix.artifact }}.tar.gz
-          if-no-files-found: error
-          compression-level: 0
-          retention-days: 14
+      - name: Read app version
+        id: version
+        run: echo "value=$(node -p \"JSON.parse(require('fs').readFileSync('src-tauri/tauri.conf.json', 'utf8')).version\")" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "not-v${{ steps.version.outputs.value }}" \
+            "not-macos-apple-silicon.tar.gz#not for Apple Silicon" \
+            --target "$GITHUB_SHA" \
+            --title "not v${{ steps.version.outputs.value }}" \
+            --generate-notes \
+            --latest \
+            --fail-on-no-commits
